@@ -1,38 +1,64 @@
 using UnityEngine;
 using System.Collections.Generic;
+using Cinemachine;
+using UnityEngine.UI;
+using TMPro;
+using UnityEngine.SceneManagement; // Nécessaire pour changer de scène
 
 public class GameManager : MonoBehaviour
 {
     [Header("Les Équipes")]
-    public List<PionStats> teamA; // Glisse les pions du Joueur 1
-    public List<PionStats> teamB; // Glisse les pions du Joueur 2
+    public List<PionStats> teamA; 
+    public List<PionStats> teamB; 
     
+    [Header("Caméras & Intro")] 
+    public CinemachineFreeLook camIntro; 
+    public CinemachineFreeLook camJeu;   
+    public GameObject canvasChoixPion;   
+    public TextMeshProUGUI texteTitre; // Titre "Au tour de..."
+
+    [Header("Game Over UI")] // --- NOUVEAU ---
+    public GameObject panelGameOver;
+    public TextMeshProUGUI texteVictoire;
+    public TextMeshProUGUI texteHistorique;
+
     [Header("Références")]
     public LanceurDeDe scriptLanceur;
     public DeLogique scriptLogique;
 
     // --- ÉTAT DU JEU ---
-    private string tourActuel = "TeamA"; // Valeur par défaut
-    private int coupsRestants = 2;       // La règle des 2 coups
-    private bool enAttenteDeSelection = true; // Est-ce qu'on doit choisir un pion ?
+    private string tourActuel = "TeamA"; 
+    private int coupsRestants = 2;       
+    private bool enAttenteDeSelection = true; 
     private PionStats pionSelectionne;
+    private bool introTerminee = false;
+    private bool partieTerminee = false; // Pour bloquer le jeu
+
+    [Header("Historique")]
+    public List<ActionTour> historiqueMatch = new List<ActionTour>(); 
+    private int numeroTourGlobal = 0;
 
     void Start()
     {
-        // --- MISE A JOUR : GESTION DE L'INITIATIVE ---
-        // On regarde si une équipe a gagné l'initiative dans la scène précédente via GameData
+        // Init Caméras
+        camIntro.Priority = 10;
+        camJeu.Priority = 0;
+
+        if (canvasChoixPion != null) canvasChoixPion.SetActive(true);
+        if (panelGameOver != null) panelGameOver.SetActive(false); // On cache le Game Over au début
+        
         if (GameData.equipeQuiCommence != "")
         {
             tourActuel = GameData.equipeQuiCommence;
-            Debug.Log("Le tour commence avec : " + tourActuel + " (Selon le duel de dé)");
         }
 
-        NouvellePhaseDeSelection();
+        // On ne lance pas NouvellePhaseDeSelection ici car c'est le joueur qui clique au tout début
     }
 
     void Update()
     {
-        // GESTION DE LA SÉLECTION (Au début du tour)
+        if (!introTerminee || partieTerminee) return; // Si fini, on ne joue plus
+
         if (enAttenteDeSelection)
         {
             if (Input.GetMouseButtonDown(0))
@@ -40,6 +66,63 @@ public class GameManager : MonoBehaviour
                 TenterDeSelectionnerPion();
             }
         }
+    }
+
+    // --- LOGIQUE AUTOMATIQUE 1v1 ---
+    // Cette fonction vérifie s'il reste 1 survivant dans chaque équipe
+    bool VerifierConditionDuel()
+    {
+        int vivantsA = CompterVivants(teamA);
+        int vivantsB = CompterVivants(teamB);
+        return (vivantsA == 1 && vivantsB == 1);
+    }
+
+    int CompterVivants(List<PionStats> equipe)
+    {
+        int count = 0;
+        foreach (var p in equipe) if (!p.estMort) count++;
+        return count;
+    }
+
+    PionStats GetDernierVivant(List<PionStats> equipe)
+    {
+        foreach (var p in equipe) if (!p.estMort) return p;
+        return null;
+    }
+
+    // ----------------------------------------------------------------
+
+    public void ChoisirPionDepart(int indexPion)
+    {
+        PionStats pionChoisi = null;
+
+        if (tourActuel == "TeamA" && indexPion < teamA.Count) 
+            pionChoisi = teamA[indexPion];
+        else if (tourActuel == "TeamB" && indexPion < teamB.Count) 
+            pionChoisi = teamB[indexPion];
+
+        if (pionChoisi != null && !pionChoisi.estMort)
+        {
+            SelectionnerPionEtDemarrer(pionChoisi);
+        }
+    }
+
+    // Fonction commune pour démarrer le tour (utilisée par le Clic UI et l'Auto-Select)
+    void SelectionnerPionEtDemarrer(PionStats pion)
+    {
+        // UI et Etats
+        if(canvasChoixPion != null) canvasChoixPion.SetActive(false);
+        introTerminee = true;
+        
+        // Caméra : Transition directe
+        camJeu.Follow = pion.transform;
+        camJeu.LookAt = pion.transform;
+        
+        camIntro.Priority = 0; 
+        camJeu.Priority = 10; 
+        
+        // Logique Jeu
+        ValiderSelection(pion);
     }
 
     void TenterDeSelectionnerPion()
@@ -51,9 +134,10 @@ public class GameManager : MonoBehaviour
         {
             PionStats pionTouche = hit.collider.GetComponent<PionStats>();
             
-            // Si on clique sur un pion, qu'il est vivant, et qu'il est de mon équipe
             if (pionTouche != null && !pionTouche.estMort && pionTouche.equipe == tourActuel)
             {
+                camJeu.Follow = pionTouche.transform;
+                camJeu.LookAt = pionTouche.transform;
                 ValiderSelection(pionTouche);
             }
         }
@@ -61,90 +145,216 @@ public class GameManager : MonoBehaviour
 
     void ValiderSelection(PionStats pion)
     {
-        Debug.Log("Pion choisi : " + pion.name);
         pionSelectionne = pion;
         enAttenteDeSelection = false;
 
-        // On configure le dé pour ce pion
         pion.gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
         scriptLogique.pionQuiJoue = pion.transform;
         scriptLanceur.personnage = pion.transform;
         
-        scriptLogique.ReinitialiserVariables(); // Réinitialiser les variables avant de reset le dé
+        scriptLogique.ReinitialiserVariables(); 
         scriptLanceur.ResetDe();
     }
 
-    // Appelé par DeLogique quand le dé s'arrête
-    public void AnalyserFinDeTir(bool aToucheEnnemi)
+    public void AnalyserFinDeTir(List<PionStats> victimes, List<string> effets)
     {
-        coupsRestants--; // On a utilisé un coup
+        coupsRestants--; 
+        bool aToucheAuMoinsUn = victimes.Count > 0;
 
-        // RÈGLE : Si on touche, le tour s'arrête immédiatement
-        if (aToucheEnnemi)
+        // HISTORIQUE
+        List<string> nomsVictimes = new List<string>();
+        foreach(var v in victimes) nomsVictimes.Add(v.name);
+        
+        ActionTour nouveauLog = new ActionTour(
+            numeroTourGlobal,
+            scriptLanceur.personnage.name,
+            aToucheAuMoinsUn ? "Attaque" : "Tir Raté",
+            nomsVictimes,
+            effets
+        );
+        historiqueMatch.Add(nouveauLog);
+        numeroTourGlobal++;
+
+        // LOGIQUE SUITE
+        if (aToucheAuMoinsUn)
         {
-            Debug.Log(">>> COUP GAGNANT ! Fin du tour.");
             PasserAuTourSuivant();
         }
-        // RÈGLE : Si on a raté mais qu'il reste des coups (ex: 1er tir raté sur 2)
         else if (coupsRestants > 0)
         {
-            Debug.Log(">>> RATÉ ! Il reste " + coupsRestants + " coup(s). Rejoue !");
-            scriptLogique.ReinitialiserVariables(); // Réinitialiser les variables avant de reset le dé
-            scriptLanceur.ResetDe(); // Le dé revient pour le 2ème tir
+            scriptLogique.ReinitialiserVariables();
+            scriptLanceur.ResetDe(); 
         }
-        // RÈGLE : Plus de coups
         else
         {
-            Debug.Log(">>> PLUS DE COUPS ! Fin du tour.");
             PasserAuTourSuivant();
         }
     }
 
     void PasserAuTourSuivant()
     {
-        VerifierVictoire();
+        // Vérification Victoire AVANT de changer de tour
+        if (VerifierVictoire()) return; // Si quelqu'un a gagné, on arrête tout
 
-        // Changement d'équipe
         tourActuel = (tourActuel == "TeamA") ? "TeamB" : "TeamA";
-        Debug.Log("=== AU TOUR DE : " + tourActuel + " ===");
-
         NouvellePhaseDeSelection();
     }
 
     void NouvellePhaseDeSelection()
     {
-        if (pionSelectionne != null)
+        // 1. Nettoyage (Dé & Ancien joueur)
+        if (pionSelectionne != null) pionSelectionne.gameObject.layer = LayerMask.NameToLayer("Default");
+
+        if (scriptLanceur != null)
         {
-            pionSelectionne.gameObject.layer = LayerMask.NameToLayer("Default");
+            if (scriptLanceur.personnage != null)
+            {
+                Collider colAncien = scriptLanceur.personnage.GetComponent<Collider>();
+                Collider colDe = scriptLanceur.GetComponent<Collider>();
+                if (colAncien && colDe) Physics.IgnoreCollision(colAncien, colDe, false);
+            }
+            scriptLanceur.personnage = null; 
+            scriptLanceur.ResetDe(); 
+            scriptLanceur.transform.position = new Vector3(0, -100, 0); 
         }
 
-        // --- MISE A JOUR : NETTOYAGE DU DÉ ---
-        // On dit au lanceur qu'il n'appartient plus à personne pour l'instant
-        // Cela empêche le dé de se téléporter sur l'ancien joueur
-        if (scriptLanceur != null) scriptLanceur.personnage = null; 
-        // -------------------------------------
-
         pionSelectionne = null;
-        coupsRestants = 2; // On remet le compteur à 2
+        coupsRestants = 2; 
         enAttenteDeSelection = true;
-        Debug.Log("Veuillez sélectionner un pion de la " + tourActuel);
-        
-        // On cache le dé sous la map en attendant la sélection
-        if(scriptLanceur != null) scriptLanceur.transform.position = new Vector3(0, -100, 0); 
+
+        // 2. CHECK 1v1 : Est-ce qu'on doit zapper l'intro ?
+        if (VerifierConditionDuel())
+        {
+            // OUI : On trouve le seul joueur dispo et on le lance direct
+            List<PionStats> equipeActive = (tourActuel == "TeamA") ? teamA : teamB;
+            PionStats survivant = GetDernierVivant(equipeActive);
+            
+            if (survivant != null)
+            {
+                // Mise à jour du texte titre au cas où
+                if (texteTitre != null) texteTitre.text = "DUEL FINAL : " + tourActuel;
+                Debug.Log("Mode 1v1 détecté : Passage direct à " + survivant.name);
+                
+                // On appelle la validation directe (sans passer par la caméra ciel)
+                SelectionnerPionEtDemarrer(survivant);
+                return; // On sort de la fonction, le tour est lancé
+            }
+        }
+
+        // 3. SINON : Comportement Classique (Caméra Ciel + UI)
+        camJeu.Follow = null; 
+        camJeu.LookAt = null;
+        camIntro.Priority = 10; 
+        camJeu.Priority = 0;
+
+        if (canvasChoixPion != null) 
+        {
+            canvasChoixPion.SetActive(true);
+            if (texteTitre != null) texteTitre.text = "Au tour de : " + tourActuel;
+        }
     }
 
-    void VerifierVictoire()
+    bool VerifierVictoire()
     {
-        if (TousMorts(teamA)) Debug.Log("VICTOIRE DE LA TEAM B !");
-        if (TousMorts(teamB)) Debug.Log("VICTOIRE DE LA TEAM A !");
+        // --- MOUCHARDS ---
+        int vivantsA = 0;
+        foreach(var p in teamA) if(!p.estMort) vivantsA++;
+        
+        int vivantsB = 0;
+        foreach(var p in teamB) if(!p.estMort) vivantsB++;
+
+        Debug.Log("Check Victoire -> Vivants A: " + vivantsA + " | Vivants B: " + vivantsB);
+        // -----------------
+
+        if (TousMorts(teamA))
+        {
+            Debug.Log("GameManager : TEAM B GAGNE ! J'appelle l'écran de fin.");
+            AfficherFinDePartie("TEAM B");
+            return true;
+        }
+        if (TousMorts(teamB))
+        {
+            Debug.Log("GameManager : TEAM A GAGNE ! J'appelle l'écran de fin.");
+            AfficherFinDePartie("TEAM A");
+            return true;
+        }
+        return false;
     }
 
     bool TousMorts(List<PionStats> equipe)
     {
-        foreach (var pion in equipe)
-        {
-            if (!pion.estMort) return false; // Il en reste au moins un vivant
-        }
+        foreach (var pion in equipe) if (!pion.estMort) return false;
         return true;
+    }
+
+    // --- GESTION FIN DE PARTIE ---
+    void AfficherFinDePartie(string equipeGagnante)
+    {
+        partieTerminee = true;
+        Debug.Log("VICTOIRE : " + equipeGagnante);
+
+        // UI
+        if (canvasChoixPion != null) canvasChoixPion.SetActive(false); // Cacher menu sélection
+        if (panelGameOver != null)
+        {
+            panelGameOver.SetActive(true);
+            if (texteVictoire != null) texteVictoire.text = "VICTOIRE DE LA " + equipeGagnante + " !";
+            
+            // Génération de l'historique texte
+            if (texteHistorique != null)
+            {
+                string rapport = "";
+                foreach(var action in historiqueMatch)
+                {
+                    rapport += "Tour " + action.tourIndex + " (" + action.nomJoueurActif + ") : " + action.typeAction + "\n";
+                    for(int i=0; i < action.nomsVictimes.Count; i++)
+                    {
+                        rapport += "   -> Touche " + action.nomsVictimes[i] + " [" + action.effetsAppliques[i] + "]\n";
+                    }
+                    rapport += "----------------\n";
+                }
+                texteHistorique.text = rapport;
+            }
+        }
+    }
+
+    // --- FONCTIONS BOUTONS (A relier dans Unity) ---
+
+    public void BoutonRestart()
+    {
+        // Relance la scène de choix "Qui commence ?"
+        SceneManager.LoadScene("SceneInitiative"); 
+    }
+
+    public void BoutonChangeCharacter()
+    {
+        // Relance la sélection des personnages
+        SceneManager.LoadScene("SceneSelection"); 
+    }
+
+    public void BoutonQuit()
+    {
+        // Retourne à l'accueil
+        SceneManager.LoadScene("SceneAccueil"); 
+    }
+}
+
+// Classe de données pour le score
+[System.Serializable]
+public class ActionTour
+{
+    public int tourIndex;
+    public string nomJoueurActif;
+    public string typeAction; 
+    public List<string> nomsVictimes;
+    public List<string> effetsAppliques; 
+
+    public ActionTour(int tour, string joueur, string action, List<string> victimes, List<string> effets)
+    {
+        tourIndex = tour;
+        nomJoueurActif = joueur;
+        typeAction = action;
+        nomsVictimes = victimes;
+        effetsAppliques = effets;
     }
 }

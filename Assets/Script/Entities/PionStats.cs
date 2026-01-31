@@ -3,7 +3,7 @@ using UnityEngine;
 public class PionStats : MonoBehaviour
 {
     [Header("Infos")]
-    public string equipe = "TeamA"; // ou "TeamB"
+    public string equipe = "TeamA"; 
     public int pointsDeVie = 2;
     public bool estMort = false;
 
@@ -20,38 +20,41 @@ public class PionStats : MonoBehaviour
         rend = GetComponent<Renderer>();
     }
 
-    public void RecevoirDegats()
+    // --- CORRECTION IMPORTANTE : void devient string ---
+    public string RecevoirDegats()
     {
-        if (estMort) return;
+        if (estMort) return "Déjà Mort";
 
         pointsDeVie--;
+        Debug.Log(name + " a reçu un coup. PV restants : " + pointsDeVie);
 
         if (pointsDeVie == 1)
         {
             // Blessé
-            Debug.Log(name + " est blessé !");
-            rend.material.color = couleurBlessure;
+            if(rend != null) rend.material.color = couleurBlessure;
+            return "Blesse";
         }
         else if (pointsDeVie <= 0)
         {
+            // Mort
             Mourir();
+            return "Mort";
         }
+
+        return "Rien";
     }
 
     void Mourir()
     {
         estMort = true;
-        Debug.Log(name + " est MORT !");
+        pointsDeVie = 0; // Sécurité
         
-        // Changement visuel
-        rend.material.color = couleurMort;
+        if(rend != null) rend.material.color = couleurMort;
         
-        // Physique de la mort (il tombe)
-        rb.constraints = RigidbodyConstraints.None; // On débloque tout pour qu'il roule
-        rb.AddForce(Random.onUnitSphere * 5f, ForceMode.Impulse); // Petit choc
+        rb.constraints = RigidbodyConstraints.None; 
+        rb.AddForce(Random.onUnitSphere * 5f, ForceMode.Impulse); 
         
-        // On change le layer pour qu'on ne puisse plus le viser ou le toucher
         gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
-        gameObject.tag = "Untagged"; // Il ne compte plus comme un ennemi
+        gameObject.tag = "Untagged"; 
     }
 }
